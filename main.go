@@ -73,6 +73,24 @@ func main() {
 	cliApp.Run(os.Args)
 }
 
+type Attempt struct {
+	StartTime        string `json:"startTime"`
+	EndTime          string `json:"endTime"`
+	LastUpdated      string `json:"lastUpdated"`
+	Duration         uint32 `json:"duration"`
+	SparkUser        string `json:"sparkUser"`
+	IsCompleted      bool   `json:"completed"`
+	LastUpdatedEpoch int64  `json:"lastUpdatedEpoch"`
+	StartTimeEpoch   int64  `json:"startTimeEpoch"`
+	EndTimeEpoch     int64  `json:"EndTimeEpoch"`
+}
+
+type Apps struct {
+	Id       string    `json:"id"`
+	Name     string    `json:"name"`
+	Attempts []Attempt `json:"attempts"`
+}
+
 func get(url string) (respStr string) {
 	fmt.Printf("GET %s\n", url)
 	resp, err := http.Get(url)
