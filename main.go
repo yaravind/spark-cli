@@ -1,11 +1,13 @@
 package main
 
 import (
-	"fmt"
+	"encoding/json"
 	cli "gopkg.in/urfave/cli.v2"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"os"
+	_ "reflect"
 )
 
 func main() {
@@ -39,30 +41,38 @@ func main() {
 					},
 				},
 				Action: func(c *cli.Context) error {
-					fmt.Printf("Total Args = %d, Args=%s", c.NArg(), c.Args())
-					fmt.Println()
-					fmt.Printf("IsSet(Completed) = %t, IsSet(Running) = %t", c.IsSet("completed"), c.IsSet("running"))
-					fmt.Println()
+
+					log.Printf("Total Args = %d, Args=%s", c.NArg(), c.Args())
+
+					log.Printf("IsSet(Completed) = %t, IsSet(Running) = %t", c.IsSet("completed"), c.IsSet("running"))
 
 					var url string = baseHistoryApiUrl + "applications"
 
 					if c.IsSet("completed") {
-						fmt.Println("Listing all 'completed' applications")
+						log.Println("Listing all 'completed' applications")
 
 						url = url + "?status=completed"
-						respStr := get(url)
-						fmt.Println(respStr)
+						respStr := getAsStr(url)
+						log.Println(respStr)
 					} else if c.IsSet("running") {
-						fmt.Println("Listing all 'running' applications")
+						log.Println("Listing all 'running' applications")
 
 						url = url + "?status=running"
-						respStr := get(url)
-						fmt.Println(respStr)
+						respStr := getAsStr(url)
+						log.Println(respStr)
 					} else {
-						fmt.Println("Listing all applications")
-
-						respStr := get(url)
-						fmt.Println(respStr)
+						log.Println("Listing all applications")
+						var apps []Apps
+						if respBuff, err := get(url); err == nil {
+							//log.Println(string(respBuff))
+							if jsonErr := json.Unmarshal(respBuff, &apps); jsonErr == nil {
+								//log.Println(apps)
+								cntTot, cntCompleted, cntIncomplete := Summary(apps)
+								log.Printf("Total: %d (Completed: %d, Incomplete: %d)", cntTot, cntCompleted, cntIncomplete)
+							} else {
+								log.Fatal(jsonErr)
+							}
+						}
 					}
 					return nil
 				},
@@ -71,6 +81,17 @@ func main() {
 	}
 
 	cliApp.Run(os.Args)
+}
+func Summary(apps []Apps) (cntTot, cntCompleted, cntIncomplete int) {
+	cntTot = len(apps)
+	for _, app := range apps {
+		if app.Attempts[0].IsCompleted {
+			cntCompleted++
+		} else {
+			cntIncomplete++
+		}
+	}
+	return
 }
 
 type Attempt struct {
@@ -91,16 +112,22 @@ type Apps struct {
 	Attempts []Attempt `json:"attempts"`
 }
 
-func get(url string) (respStr string) {
-	fmt.Printf("GET %s\n", url)
+func get(url string) ([]byte, error) {
+	log.Printf("GET %s\n", url)
 	resp, err := http.Get(url)
 	if err != nil {
-		fmt.Println(err)
+		log.Println(err)
+		return nil, err
 	} else {
 		defer resp.Body.Close()
-		buff, _ := ioutil.ReadAll(resp.Body)
-		respStr = string(buff)
+		respBuff, _ := ioutil.ReadAll(resp.Body)
+		return respBuff, nil
 	}
+}
 
-	return
+func getAsStr(url string) string {
+	if respBuff, err := get(url); err != nil {
+		return string(respBuff)
+	}
+	return "{}"
 }
