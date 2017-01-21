@@ -12,46 +12,19 @@ import (
 	//_ "reflect"
 )
 
-func checkDbErr(err error, args ...string) {
-
-	if err != nil {
-		log.Println("Error")
-		log.Fatalf("%q: %s", err, args)
-	}
-}
-
-func insert(db *sql.DB, apps *[]Apps) {
-	tx, err := db.Begin()
-	checkDbErr(err)
-
-	stmt, err := tx.Prepare("insert into APPS(APP_ID, NAME, DURATION, IS_COMPLETED, USERSTART_T, END_T, LAST_UPDATED_T, START_E, END_E, LAST_UPDATED_E) values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-	checkDbErr(err)
-
-	defer stmt.Close()
-
-	for _, app := range *apps {
-		//log.Printf("Inserting App: %s",app.Id)
-		for _, attempt := range app.Attempts {
-			//log.Printf("\tInserting Attempt: ", attempt.IsCompleted)
-			_, err = stmt.Exec(app.Id, app.Name, attempt.Duration, attempt.IsCompleted, attempt.StartTime, attempt.EndTime, attempt.LastUpdated, attempt.StartTimeEpoch, attempt.EndTimeEpoch, attempt.LastUpdatedEpoch)
-			checkDbErr(err)
-		}
-	}
-	tx.Commit()
-}
 func main() {
 	db, err := sql.Open("sqlite3", ":memory:")
-	checkDbErr(err)
+	checkErr(err)
 	defer db.Close()
 
 	//fail-fast if can't connect to DB
-	checkDbErr(db.Ping())
+	checkErr(db.Ping())
 
 	//create table
 	_, err = db.Exec("create table APPS (ID integer PRIMARY KEY, APP_ID string not null, NAME string not null, " +
 		"DURATION integer, IS_COMPLETED integer, USERSTART_T string, END_T string, LAST_UPDATED_T string, START_E integer, " +
 		"END_E integer, LAST_UPDATED_E integer); delete from APPS;")
-	checkDbErr(err)
+	checkErr(err)
 
 	const baseHistoryApiUrl = "http://localhost:18080/api/v1/"
 	cliApp := &cli.App{
@@ -104,30 +77,17 @@ func main() {
 						log.Println(respStr)
 					} else {
 						log.Println("Listing all applications")
-						var apps []Apps
-						if respBuff, err := get(url); err == nil {
-							//log.Println(string(respBuff))
-							if jsonErr := json.Unmarshal(respBuff, &apps); jsonErr == nil {
-								//log.Println(apps)
-								var cntTot, cntCompleted, cntIncomplete int
-								insert(db, &apps)
+						if apps, err := GetApps(url); err == nil {
+							//log.Println(len(*apps))
+							insert(db, apps)
 
-								qryTotal := "select count(distinct APP_ID) from APPS"
-								err := db.QueryRow(qryTotal).Scan(&cntTot)
-								checkDbErr(err, qryTotal)
+							cntTot, cntCompleted, cntIncomplete := GetAppsSummary(db)
 
-								qryIsCompleted := "select count(ID) from APPS where IS_COMPLETED=?"
-								err = db.QueryRow(qryIsCompleted, 1).Scan(&cntCompleted)
-								checkDbErr(err, qryIsCompleted)
-
-								err = db.QueryRow(qryIsCompleted, 0).Scan(&cntIncomplete)
-								checkDbErr(err, qryIsCompleted)
-
-								log.Printf("Total Applications: %d (Completed: %d, Incomplete: %d)", cntTot, cntCompleted, cntIncomplete)
-							} else {
-								log.Fatal(jsonErr)
-							}
+							log.Printf("Total Applications: %d (Completed: %d, Incomplete: %d)", cntTot, cntCompleted, cntIncomplete)
+						} else {
+							checkErr(err)
 						}
+
 					}
 					return nil
 				},
@@ -137,17 +97,10 @@ func main() {
 
 	cliApp.Run(os.Args)
 }
-func Summary(apps *[]Apps) (cntTot, cntCompleted, cntIncomplete int) {
-	cntTot = len(*apps)
-	for _, app := range *apps {
-		if app.Attempts[0].IsCompleted {
-			cntCompleted++
-		} else {
-			cntIncomplete++
-		}
-	}
-	return
-}
+
+//----------------------------------------------------------------------------------------------------------------------
+// Core domain types.
+//----------------------------------------------------------------------------------------------------------------------
 
 type Attempt struct {
 	StartTime        string `json:"startTime"`
@@ -167,6 +120,39 @@ type Apps struct {
 	Attempts []Attempt `json:"attempts"`
 }
 
+func checkErr(err error, args ...string) {
+	if err != nil {
+		log.Println("Error")
+		log.Fatalf("%q: %s", err, args)
+	}
+}
+
+//----------------------------------------------------------------------------------------------------------------------
+// Functions working with Spark REST API.
+//----------------------------------------------------------------------------------------------------------------------
+
+func GetApps(url string) (*[]Apps, error) {
+	var apps []Apps
+	if respBuff, err := get(url); err == nil {
+		if jsonErr := json.Unmarshal(respBuff, &apps); jsonErr == nil {
+			log.Println(apps)
+			return &apps, nil
+		} else {
+			log.Printf("Response: %s", string(respBuff))
+			return nil, err
+		}
+	} else {
+		return nil, err
+	}
+}
+
+func getAsStr(url string) string {
+	if respBuff, err := get(url); err != nil {
+		return string(respBuff)
+	}
+	return "{}"
+}
+
 func get(url string) ([]byte, error) {
 	log.Printf("GET %s\n", url)
 	resp, err := http.Get(url)
@@ -180,9 +166,74 @@ func get(url string) ([]byte, error) {
 	}
 }
 
-func getAsStr(url string) string {
-	if respBuff, err := get(url); err != nil {
-		return string(respBuff)
+//----------------------------------------------------------------------------------------------------------------------
+// Functions working with in-memory DB.
+//----------------------------------------------------------------------------------------------------------------------
+
+func GetAppsSummary(db *sql.DB) (cntTot, cntCompleted, cntIncomplete int) {
+	cntTot, cntCompleted, cntIncomplete = GetAppsTotalCount(db), GetAppsCompleted(db), GetAppsIncomplete(db)
+	return
+}
+
+func GetAppsTotalCount(db *sql.DB) int {
+	var cntTot int
+	qryTotal := "select count(distinct APP_ID) from APPS"
+	err := db.QueryRow(qryTotal).Scan(&cntTot)
+	checkErr(err, qryTotal)
+
+	return cntTot
+}
+
+func GetAppsCompleted(db *sql.DB) int {
+	var cntCompleted int
+	qryIsCompleted := "select count(ID) from APPS where IS_COMPLETED=?"
+	err := db.QueryRow(qryIsCompleted, 1).Scan(&cntCompleted)
+	checkErr(err, qryIsCompleted)
+
+	return cntCompleted
+}
+
+func GetAppsIncomplete(db *sql.DB) int {
+	var cntIncomplete int
+	qryIsCompleted := "select count(ID) from APPS where IS_COMPLETED=?"
+	err := db.QueryRow(qryIsCompleted, 0).Scan(&cntIncomplete)
+	checkErr(err, qryIsCompleted)
+
+	return cntIncomplete
+}
+
+func insert(db *sql.DB, apps *[]Apps) {
+	tx, err := db.Begin()
+	checkErr(err)
+
+	stmt, err := tx.Prepare("insert into APPS(APP_ID, NAME, DURATION, IS_COMPLETED, USERSTART_T, END_T, LAST_UPDATED_T, START_E, END_E, LAST_UPDATED_E) values(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+	checkErr(err)
+
+	defer stmt.Close()
+
+	for _, app := range *apps {
+		//log.Printf("Inserting App: %s",app.Id)
+		for _, attempt := range app.Attempts {
+			//log.Printf("\tInserting Attempt: ", attempt.IsCompleted)
+			_, err = stmt.Exec(app.Id, app.Name, attempt.Duration, attempt.IsCompleted, attempt.StartTime, attempt.EndTime, attempt.LastUpdated, attempt.StartTimeEpoch, attempt.EndTimeEpoch, attempt.LastUpdatedEpoch)
+			checkErr(err)
+		}
 	}
-	return "{}"
+	tx.Commit()
+}
+
+//----------------------------------------------------------------------------------------------------------------------
+// Functions working on Apps struct.
+//----------------------------------------------------------------------------------------------------------------------
+
+func Summary(apps *[]Apps) (cntTot, cntCompleted, cntIncomplete int) {
+	cntTot = len(*apps)
+	for _, app := range *apps {
+		if app.Attempts[0].IsCompleted {
+			cntCompleted++
+		} else {
+			cntIncomplete++
+		}
+	}
+	return
 }
