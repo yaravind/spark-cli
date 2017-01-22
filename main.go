@@ -10,7 +10,14 @@ import (
 	"net/http"
 	"os"
 	//_ "reflect"
+	//"fmt"
 )
+
+var (
+	baseHistoryApiUrl string
+)
+
+const defaultBaseUrl string = "http://localhost:18080/api/v1/"
 
 func main() {
 	db, err := sql.Open("sqlite3", ":memory:")
@@ -26,7 +33,6 @@ func main() {
 		"END_E integer, LAST_UPDATED_E integer); delete from APPS;")
 	checkErr(err)
 
-	const baseHistoryApiUrl = "http://localhost:18080/api/v1/"
 	cliApp := &cli.App{
 		Name:        "spark-cli",
 		Usage:       "CLI for Apache Spark REST API",
@@ -39,6 +45,15 @@ func main() {
 			},
 		},
 		EnableShellCompletion: true,
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:        "url",
+				Aliases:     []string{"u"},
+				Value:       defaultBaseUrl,
+				Usage:       "specify the `REST-URL`",
+				Destination: &baseHistoryApiUrl,
+			},
+		},
 		Commands: []*cli.Command{
 			{
 				Name:  "apps",
@@ -135,7 +150,7 @@ func GetApps(url string) (*[]Apps, error) {
 	var apps []Apps
 	if respBuff, err := get(url); err == nil {
 		if jsonErr := json.Unmarshal(respBuff, &apps); jsonErr == nil {
-			log.Println(apps)
+			//log.Println(apps)
 			return &apps, nil
 		} else {
 			log.Printf("Response: %s", string(respBuff))
